@@ -1,5 +1,5 @@
 def main():
-    print("Hello from kaggle!")
+    print("Scrape the Kaggle!")
 
 
 if __name__ == "__main__":
