@@ -7,34 +7,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from time import sleep
-from typing import List
 
 from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore[import-untyped]
-from pydantic import BaseModel, Field
+
+from . import config, data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-class SearchRecord(BaseModel):
-    """Record of a single kernel search operation."""
-
-    search_str: str
-    datetime: str
-    file_name: str
-    amount: int = 0
-
-
-class Search(BaseModel):
-    """Container for a list of search records."""
-
-    search: List[SearchRecord] = Field(default_factory=list)
-
-
-class Memory(BaseModel):
-    """Top-level memory structure storing kernel search history."""
-
-    kernels: Search = Search()
 
 
 def search_kernels_handler(args: argparse.Namespace) -> None:
@@ -61,10 +40,10 @@ def search_kernels_handler(args: argparse.Namespace) -> None:
             with open(memory_json_path, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if content:
-                    memory = Memory.model_validate(json.loads(content))
+                    memory = data.Memory.model_validate(json.loads(content))
                 else:
                     # File exists but is empty, create new memory
-                    memory = Memory()
+                    memory = data.Memory()
                     with open(memory_json_path, "w", encoding="utf-8") as f:
                         json.dump(memory.model_dump(), f, indent=4)
                     logger.info("Memory file was empty, created new memory JSON")
@@ -73,7 +52,7 @@ def search_kernels_handler(args: argparse.Namespace) -> None:
                 f"Invalid JSON in memory file: {e}. Verify memory file integrity."
             )
     else:
-        memory = Memory()
+        memory = data.Memory()
         with open(memory_json_path, "w", encoding="utf-8") as f:
             json.dump(memory.model_dump(), f, indent=4)
         logger.info("Created new memory JSON")
@@ -130,10 +109,10 @@ def search_kernels_handler(args: argparse.Namespace) -> None:
         logger.info(f"Saved {total_rows} results to {output_file}")
 
         # Save search record to kernels.json
-        search_record = SearchRecord(
+        search_record = data.SearchRecord(
             search_str=args.search,
             datetime=datetime.now().isoformat(),
-            file_name=str(output_file),
+            file_name=output_file.name,
             amount=total_rows,
         )
         memory.kernels.search.append(search_record)
@@ -147,10 +126,10 @@ def search_kernels_handler(args: argparse.Namespace) -> None:
 
         # Save partial search record to kernels.json
         if total_rows > 0:
-            search_record = SearchRecord(
+            search_record = data.SearchRecord(
                 search_str=args.search,
                 datetime=datetime.now().isoformat(),
-                file_name=str(output_file),
+                file_name=output_file.name,
                 amount=total_rows,
             )
             memory.kernels.search.append(search_record)
@@ -199,7 +178,7 @@ def main() -> None:
     parser_search_kernels.add_argument(
         "-o",
         "--out",
-        default="out",
+        default=config.DEFAULT_DATA_DIR,
         help="Directory to save the results (default directory: out)",
     )
     parser_search_kernels.set_defaults(func=search_kernels_handler)
