@@ -1,26 +1,82 @@
 import argparse
 import csv
+import json
 import logging
 import random
 import sys
 from datetime import datetime
 from pathlib import Path
 from time import sleep
+from typing import List
 
-from kaggle.api.kaggle_api_extended import KaggleApi
+from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore[import-untyped]
+from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def search_notebooks_handler(args: argparse.Namespace) -> None:
+class SearchRecord(BaseModel):
+    """Record of a single kernel search operation."""
+
+    search_str: str
+    datetime: str
+    file_name: str
+    amount: int = 0
+
+
+class Search(BaseModel):
+    """Container for a list of search records."""
+
+    search: List[SearchRecord] = Field(default_factory=list)
+
+
+class Memory(BaseModel):
+    """Top-level memory structure storing kernel search history."""
+
+    kernels: Search = Search()
+
+
+def search_kernels_handler(args: argparse.Namespace) -> None:
+    """
+    Search Kaggle kernels and save results to CSV file.
+
+    Searches for kernels matching the search term, paginates through results,
+    and saves them to a CSV file. Also maintains a memory.json file tracking
+    all search operations.
+    """
     api = KaggleApi()
     api.authenticate()
 
     output_file = (
-        Path(args.out) / f"notebooks-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+        Path(args.out) / f"kernels-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Parse kernels memory JSON
+    memory_json_path = Path(args.out) / "memory.json"
+
+    if memory_json_path.exists():
+        try:
+            with open(memory_json_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    memory = Memory.model_validate(json.loads(content))
+                else:
+                    # File exists but is empty, create new memory
+                    memory = Memory()
+                    with open(memory_json_path, "w", encoding="utf-8") as f:
+                        json.dump(memory.model_dump(), f, indent=4)
+                    logger.info("Memory file was empty, created new memory JSON")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ValueError(
+                f"Invalid JSON in memory file: {e}. Verify memory file integrity."
+            )
+    else:
+        memory = Memory()
+        with open(memory_json_path, "w", encoding="utf-8") as f:
+            json.dump(memory.model_dump(), f, indent=4)
+        logger.info("Created new memory JSON")
 
     page = 1
     page_size = 100
@@ -69,24 +125,57 @@ def search_notebooks_handler(args: argparse.Namespace) -> None:
 
                 page += 1
 
-                sleep(random.uniform(5.5, 10.5))
+                sleep(random.uniform(0.5, 1.5))
 
         logger.info(f"Saved {total_rows} results to {output_file}")
+
+        # Save search record to kernels.json
+        search_record = SearchRecord(
+            search_str=args.search,
+            datetime=datetime.now().isoformat(),
+            file_name=str(output_file),
+            amount=total_rows,
+        )
+        memory.kernels.search.append(search_record)
+        with open(memory_json_path, "w", encoding="utf-8") as f:
+            json.dump(memory.model_dump(), f, indent=4)
+        logger.info("Memory JSON file updated")
     except KeyboardInterrupt:
         logger.info(
             f"\nInterrupted by user. Saved {total_rows} results to {output_file}"
         )
+
+        # Save partial search record to kernels.json
+        if total_rows > 0:
+            search_record = SearchRecord(
+                search_str=args.search,
+                datetime=datetime.now().isoformat(),
+                file_name=str(output_file),
+                amount=total_rows,
+            )
+            memory.kernels.search.append(search_record)
+            with open(memory_json_path, "w", encoding="utf-8") as f:
+                json.dump(memory.model_dump(), f, indent=4)
+            logger.info("Memory JSON file updated")
+
         sys.exit(0)
 
 
 def utils_test_handler(args: argparse.Namespace) -> None:
+    """Test utility handler for debugging purposes."""
     if args.debug:
         logging.getLogger("src").setLevel(logging.DEBUG)
 
     logger.debug("Test")
 
 
-def main():
+def main() -> None:
+    """
+    Main entry point for the Kaggle scraper CLI.
+
+    Sets up command line argument parsing and routes to appropriate handlers
+    for search and utility commands.
+    """
     parser = argparse.ArgumentParser(description="Scalper CLI")
     parser.set_defaults(func=lambda _: parser.print_help())
     subcommands = parser.add_subparsers(description="Scalper commands")
@@ -98,22 +187,22 @@ def main():
         description="Scalper search commands"
     )
 
-    parser_search_notebooks = subcommands_search.add_parser(
-        "notebooks", description="Search notebooks"
+    parser_search_kernels = subcommands_search.add_parser(
+        "kernels", description="Search kernels"
     )
-    parser_search_notebooks.add_argument(
+    parser_search_kernels.add_argument(
         "-s",
         "--search",
         required=True,
         help="Term(s) to search for",
     )
-    parser_search_notebooks.add_argument(
+    parser_search_kernels.add_argument(
         "-o",
         "--out",
         default="out",
         help="Directory to save the results (default directory: out)",
     )
-    parser_search_notebooks.set_defaults(func=search_notebooks_handler)
+    parser_search_kernels.set_defaults(func=search_kernels_handler)
 
     # Util command parser
     parser_utils = subcommands.add_parser("utils", description="Scalper utils")
